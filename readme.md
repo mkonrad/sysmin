@@ -31,13 +31,13 @@ SHELL is set to /usr/sbin/nologin
 These changes effect how the useradd command is run to add new users. 
 
 Syntax for adding a service account:
-  # [root@machine ]# /sbin/useradd -b /opt -mr -G <group_name> <service_account>
+## [root@machine ]# /sbin/useradd -b /opt -mr -G <group_name> <service_account>
 
 Syntax for adding a regular user account
-  # [root@machine ]# /sbin/useradd -s /bin/bash -m -G <user_name>
+## [root@machine ]# /sbin/useradd -s /bin/bash -m -G <user_name>
 
 Syntax for adding a service group:
-  # [root@machine ]# /usr/sbin/groupadd -r <group_name> 
+## [root@machine ]# /usr/sbin/groupadd -r <group_name> 
 
 
 ### Bashrc Changes
