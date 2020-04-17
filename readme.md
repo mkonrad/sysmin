@@ -3,8 +3,8 @@ Introduction
 ============
 pic - the postinstall adjustment tool is a basic shell script for making 
 some minor adjustments to a Linux installation.  
-The script changes are particular useful if the system will be a server, 
-running a Java applications.  
+The script changes are particularly useful if the system is a server 
+running Java applications.  
 
 This script was created to take care of some basic house keeping, creating 
 a configuration backup directory /var/local/backup, changing some default 
