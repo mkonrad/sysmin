@@ -1,0 +1,303 @@
+#! /bin/bash
+
+# Author: Michael Konrad - Copyright 2020 All rights reserved.
+#
+# Permission to use, copy, modify, and distribute this software for any
+# purpose with or without fee is hereby granted, provided that the above
+# copyright notice and this permission notice appear in all copies.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+#
+# Script to create local backup directory, update bashrc with JAVA_HOME, 
+#   update /etc/default/useradd SHELL to nologin, 
+#   optionally add "services" group, set group ownership on /opt directory, 
+#   and add a service account, service account home directory is created in
+#   /opt
+
+######################################
+# Functions
+######################################
+
+postinstall_config() {
+  # Create the configuration backup directory
+  if [ ! -d /var/local/backup ]; then
+    mkdir /var/local/backup
+  fi
+
+  # Change the useradd default shell to nologin
+  #update_useradd
+  
+  # Check existing /etc/skel/.bashrc and set JAVA_HOME
+  update_bashrc
+  
+  # Run the additional service account setup
+  if [ "$sub" = "acc" ]; then
+
+    #  /opt as services home directory
+
+    if [ ! "$groupname" = "" ]; then
+      /usr/sbin/groupadd -r $groupname
+      /bin/chgrp $groupname /opt
+      /bin/chmod g+w /opt
+    fi
+
+    # create the specified service account
+    if [[ ! "$username" = "" && ! "$groupname" = "" ]]; then
+      /sbin/useradd -b /opt -mr -G $groupname $username
+    fi
+  fi
+}  
+
+# This function is not used, mostly here for documentation purposes
+new_bashrc() {
+  # /etc/skel/.bashrc with JAVA_HOME content
+  echo """
+# .bashrc 
+
+# Source global definitions
+if [ -f /etc/bashrc ]; then  
+  . /etc/bashrc
+fi
+
+# Uncomment the following line if you don't like systemctl auto-paging feature:
+# export SYSTEMD_PAGER=
+
+# User specific aliases and functions
+
+JAVA_HOME=$jhp
+
+# Comment the following line to not add JAVA_HOME to PATH
+PATH=\$JAVA_HOME/bin:\$PATH
+
+export JAVA_HOME PATH
+  """ > /tmp/$bashrc
+
+}
+
+# Clean up a temporary files
+tfcu() {
+  if [ -f /etc/skel/.bashrc ]; then
+    if [ -f /tmp/$bashrc ]; then
+      rm -f /tmp/$bashrc
+    fi
+    if [ -f /tmp/$bashrc$$ ]; then
+      rm -f /tmp/$bashrc$$
+    fi
+  fi
+
+}
+
+# Creates new JAVA_HOME text to be added to bashrc
+jhtext() {
+  javahometext=$(echo """
+\
+JAVA_HOME=$jhp
+\
+
+\
+#Comment the following line to not add JAVA_HOME/bin to path
+\
+PATH=\$JAVA_HOME/bin:\$PATH
+\
+
+\
+export JAVA_HOME PATH
+\
+""") 
+
+}
+
+# Updates existing export fields in existing bashrc
+jhexporttext() {
+  #Is export already defined in .bashrc
+  expExist=$(awk '/^export/ {print $0}' /etc/skel/$bashrc)
+  #Is JAVA_HOME already exported
+  expJh=$(echo $expExist | grep "JAVA_HOME")
+
+  if [ -f /tmp/$bashrc$$ ]; then
+    # Add JAVA_HOME to export
+    if [[ $expJh == "" && $expExist == "" ]]; then
+      sed '\$a\ "export JAVA_HOME"' /tmp/$bashrc$$ > /tmp/$bashrc    
+    elif [[ $expExist != "" && $expJh == "" ]]; then
+      sed '/^export/i\ " JAVA_HOME "' /tmp/$bashrc$$ > /tmp/$bashrc
+    fi 
+  fi
+}
+
+
+# Set default shell to nologin
+update_useradd() {
+  # Make a backup copy first
+  if [ -f /etc/default/useradd ]; then
+    cp -pb /etc/default/useradd /var/local/backup/useradd.orig
+    
+    # Change default shell to nologin
+    sed "s/\/bin\/bash/\/usr\/sbin\/nologin/" /etc/default/useradd > /tmp/useradd$$
+
+    cp -p /tmp/useradd$$ /etc/default/useradd
+
+    rm -f /tmp/useradd$$    
+  fi
+
+}
+
+# Add JAVA_HOME to .bashrc 
+update_bashrc() {
+  # Check if /etc/skel/.bashrc is existing 
+  #  Set JAVA_HOME to the installed java 
+  java_home_path=$(/usr/sbin/alternatives --list | grep -m 1 "java" | awk '{print $3}')
+  jhp=$(echo $java_home_path | sed 's/\/bin\/java//')
+
+  if [ -d $jhp ]; then
+    if [ -f /etc/skel/$bashrc ]; then
+      # Backup existing /etc/skel/.bashrc 
+      cp -pb /etc/skel/$bashrc /var/local/backup/bashrc.orig
+
+      #Is JAVA_HOME already defined in .bashrc
+      ejh=$(awk '/^JAVA_HOME/ {print $1}' /etc/skel/$bashrc)
+      
+      if [[ $ejh != "" ]]; then
+        ejhp=$(awk -F= '/^JAVA_HOME/ {print $2}' /etc/skel/$bashrc)
+
+        if [[ $ejhp != "" && $jhp != $ejhp ]]; then
+          # Modify existing bashrc
+          echo "Updating JAVA_HOME..."
+          
+          sed "/^JAVA_HOME=/c\JAVA_HOME=$jhp" /etc/skel/$bashrc > /tmp/$bashrc$$
+          
+          # Check and set export JAVA_HOME 
+          jhexporttext
+          
+          # Copy updated bashrc back to /etc/skel
+          if [ -f /tmp/$bashrc ]; then
+            cp -p /tmp/$bashrc /etc/skel/$bashrc
+          elif [ -f /tmp/$bashrc$$ ]; then
+            cp -p /tmp/$bashrc$$ /etc/skel/$bashrc
+          fi
+
+          # Clean up temporary files
+          tfcu
+
+        elif [ $ejhp == "" ]; then
+          echo "Setting JAVA_HOME..."
+
+	  sed "/^JAVA_HOME=/c\JAVA_HOME=$jhp" /etc/skel/$bashrc > /tmp/$bashrc$$
+
+          # Check and set export JAVA_HOME 
+          jhexporttext
+
+          # Copy updated bashrc back to /etc/skel
+          if [ -f /tmp/$bashrc ]; then
+            cp -p /tmp/$bashrc /etc/skel/$bashrc
+          elif [ -f /tmp/$bashrc$$ ]; then
+            cp -p /tmp/$bashrc$$ /etc/skel/$bashrc
+          fi
+
+          # Clean up temporary files 
+          tfcu
+        fi
+      else 
+        echo "Adding JAVA_HOME..."
+        jhtext
+        # Processes the text adding escapes
+        at=`printf '%q' "$javahometext"`
+     
+        # Edit the existing .bashrc file to add JAVA_HOME
+        sed "\$a\ $at" /etc/skel/$bashrc > /tmp/$bashrc$$
+
+        # Clean up extraneous characters left by printf
+        sed -e "s/$'//" -e "s/'//" /tmp/$bashrc$$ > /tmp/$bashrc
+
+        # Update the existing file
+        cp -p /tmp/$bashrc /etc/skel/$bashrc
+
+        # Clean up temporary files
+        tfcu
+      fi
+    else 
+      echo "Generating /etc/skel/.bashrc..."
+      new_bashrc
+      cp -p /tmp/$bashrc /etc/skel/$bashrc
+      
+      # Clean up temporary files
+      tfcu
+    fi
+  fi
+
+
+}
+
+######################################
+# Variable Initialization
+######################################
+sub=""
+groupname=""
+username=""
+bashrc=".bashrc"
+javahometext=""
+
+######################################
+# Process script arguements
+######################################
+
+while getopts ":h" opt; do
+  case ${opt} in
+    h )
+      echo "Usage:"
+      echo "    pic -h          Display this help message."
+      echo "    pic run         Run postinstall-config to create the backup directory 
+                    /var/local/backup and modify /etc/skel/.bashrc 
+                    to include JAVA_HOME."
+      echo ""
+      echo "    pic run acc -g <group_name> -u <service_account>  
+
+                    Run postinstall-config creating the specified service group
+                    and service account and modify /opt group permissions. 
+                    See readme for details."
+      exit 0
+      ;;
+    \? )
+      echo "Invalid Option: -$OPTARG" 1>&2
+      exit 1
+      ;;
+   esac
+done
+shift $((OPTIND -1))
+
+subcommand=$1
+shift # remove `pic` from the argument list
+
+case "$subcommand" in
+  run )
+    sub=$1
+    shift # remove `run` from the argument list
+    
+  while getopts "g:u:" opt; do
+    case ${opt} in
+      g ) 
+        groupname=$OPTARG
+        ;;
+      u )
+        username=$OPTARG
+        ;;
+      \? )
+        echo "Invalid Option: -$OPTARG" 1>&2
+        exit 1
+        ;;
+      : )
+        echo "Invalid Option: -$OPTARG requires the file to be processed" 1>&2
+        exit 1
+        ;;
+    esac
+  done
+  shift $((OPTIND -1))
+esac
+
+postinstall_config 
+
