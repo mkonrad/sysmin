@@ -16,9 +16,23 @@
 #
 # Script to create local backup directory, update bashrc with JAVA_HOME, 
 #   update /etc/default/useradd SHELL to nologin, 
-#   optionally add "services" group, set group ownership on /opt directory, 
-#   and add a service account, service account home directory is created in
-#   /opt
+#   optionally add "services" group, set group ownership on the variable
+#   localdir directory, 
+#   and add a service account, service account home directory is created 
+#   in $localdir
+
+######################################
+# Variable Initialization
+######################################
+sub=""
+groupaddresult=""
+groupname=""
+username=""
+bashrc=".bashrc"
+logindefs="login.defs"
+javahometext=""
+subguidtext=""
+localdir="/opt/local"
 
 ######################################
 # Functions
@@ -31,7 +45,10 @@ postinstall_config() {
   fi
 
   # Change the useradd default shell to nologin
-  #update_useradd
+  update_useradd
+
+  # Check login.defs and add SUB_GID_XXX, SUB_UID_XXX values
+  update_logindefs
   
   # Check existing /etc/skel/.bashrc and set JAVA_HOME
   update_bashrc
@@ -39,17 +56,21 @@ postinstall_config() {
   # Run the additional service account setup
   if [ "$sub" = "acc" ]; then
 
-    #  /opt as services home directory
-
+    # $localdir as serivce account home directory
+    # Add the specified group
     if [ ! "$groupname" = "" ]; then
-      /usr/sbin/groupadd -r $groupname
-      /bin/chgrp $groupname /opt
-      /bin/chmod g+w /opt
+      groupaddresult=$(/usr/sbin/groupadd -r $groupname 2>&1 | grep exists)
+      /bin/chgrp $groupname $localdir 
+      /bin/chmod g+w $localdir 
     fi
 
-    # create the specified service account
+    # Add the specified service account
     if [[ ! "$username" = "" && ! "$groupname" = "" ]]; then
-      /sbin/useradd -b /opt -mr -G $groupname $username
+      /sbin/useradd -b $localdir -m -G $groupname $username
+    elif [[ ! "$username" = "" && ! $groupaddresult = "" ]]; then
+      /sbin/useradd -b $localdir -m -G $groupname $username
+    elif [[ ! "$username" = "" ]]; then 
+      /sbin/useradd -b $localdir -m $username
     fi
   fi
 }  
@@ -88,6 +109,15 @@ tfcu() {
     fi
     if [ -f /tmp/$bashrc$$ ]; then
       rm -f /tmp/$bashrc$$
+    fi
+  fi
+
+  if [ -f /etc/login.defs ]; then
+    if [ -f /tmp/$logindefs ]; then
+      rm -f /tmp/$logindefs
+    fi
+    if [ -f /tmp/$logindefs$$ ]; then
+      rm -f /tmp/$logindefs$$
     fi
   fi
 
@@ -130,6 +160,12 @@ jhexporttext() {
   fi
 }
 
+# Update PATH to include /usr/local/bin
+updatePath() {
+  #Is PATH already defined in .bashrc
+  pathExist=$(awk '/^PATH/ {print $0}' /etc/skel/$bashrc)
+
+}
 
 # Set default shell to nologin
 update_useradd() {
@@ -138,7 +174,7 @@ update_useradd() {
     cp -pb /etc/default/useradd /var/local/backup/useradd.orig
     
     # Change default shell to nologin
-    sed "s/\/bin\/bash/\/usr\/sbin\/nologin/" /etc/default/useradd > /tmp/useradd$$
+    sed "s/\/bin\/bash/\/sbin\/nologin/" /etc/default/useradd > /tmp/useradd$$
 
     cp -p /tmp/useradd$$ /etc/default/useradd
 
@@ -146,6 +182,70 @@ update_useradd() {
   fi
 
 }
+
+# Creates new SUB_GID_xxx text to be added to login.defs 
+subgutext() {
+  subguidtext=$(echo """
+\
+\
+#
+# MIN/MAX values for automatic subuid selection in useradd
+#
+SUB_UID_MIN=100000
+SUB_UID_MAX=600100000
+SUB_UID_COUNT=65536
+\
+
+\
+#
+# MIN/MAX values for automatic subgid selection in useradd
+#
+SUB_GID_MIN=100000
+SUB_GID_MAX=600100000
+SUB_GID_COUNT=65536
+\
+	""")
+}
+
+
+# Set sub_gid and sub_uid values in /etc/login.defs
+update_logindefs() {
+  if [ -f /etc/login.defs ]; then
+    
+    # Make a backup copy first
+    cp -pb /etc/login.defs /var/local/backup/login.defs.orig
+    
+    # TODO only covers the use case of non-existing values
+    # Confirm sub_gid_xxx and sub_uid_xxx do not exist
+    sgmin=$(grep -m 1 "SUB_GID_MIN" /etc/$logindefs | wc -l)
+    sgmax=$(grep -m 1 "SUB_GID_MAX" /etc/$logindefs | wc -l)
+    sgcount=$(grep -m 1 "SUB_GID_COUNT" /etc/$logindefs | wc -l)
+    sumin=$(grep -m 1 "SUB_UID_MIN" /etc/$logindefs | wc -l)
+    sumax=$(grep -m 1 "SUB_UID_MAX" /etc/$logindefs | wc -l)
+    sucount=$(grep -m 1 "SUB_UID_COUNT" /etc/$logindefs | wc -l)
+    if [[ $sgmin == 0 && $sgmax == 0 && $sgcount == 0 && $sumin == 0 && $sumax == 0 && $sucount == 0 ]]; then 
+      
+      # Pull text to add to login.defs
+      subgutext
+      at=`printf '%q' "$subguidtext"`
+
+      # Add sub_uid_xxx, sub_gid_xxx to login.defs
+      sed "\$a\ $at" /etc/$logindefs > /tmp/$logindefs$$
+
+      # Clean up extraneous characters left by printf
+      sed -e "s/$'//" -e "s/'//" /tmp/$logindefs$$ > /tmp/$logindefs
+
+    fi
+
+    if [ -f /tmp/$logindefs ]; then
+      cp -p /tmp/$logindefs /etc/$logindefs
+    fi
+
+    tfcu
+  fi
+
+}
+
 
 # Add JAVA_HOME to .bashrc 
 update_bashrc() {
@@ -184,7 +284,7 @@ update_bashrc() {
           # Clean up temporary files
           tfcu
 
-        elif [ $ejhp == "" ]; then
+        elif [[ $ejhp == "" ]]; then
           echo "Setting JAVA_HOME..."
 
 	  sed "/^JAVA_HOME=/c\JAVA_HOME=$jhp" /etc/skel/$bashrc > /tmp/$bashrc$$
@@ -229,18 +329,7 @@ update_bashrc() {
       tfcu
     fi
   fi
-
-
 }
-
-######################################
-# Variable Initialization
-######################################
-sub=""
-groupname=""
-username=""
-bashrc=".bashrc"
-javahometext=""
 
 ######################################
 # Process script arguements
@@ -277,7 +366,7 @@ case "$subcommand" in
   run )
     sub=$1
     shift # remove `run` from the argument list
-    
+
   while getopts "g:u:" opt; do
     case ${opt} in
       g ) 
@@ -297,7 +386,7 @@ case "$subcommand" in
     esac
   done
   shift $((OPTIND -1))
+  postinstall_config
 esac
 
-postinstall_config 
 
